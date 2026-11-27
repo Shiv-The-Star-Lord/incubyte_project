@@ -1,0 +1,88 @@
+-- Register the latest committed Workspace version.
+
+ALTER CODE BUNDLE SKYPOINTS_INCU.OPS.SKYPOINTS_PIPELINE_BUNDLE
+ADD VERSION FROM
+'snow://workspace/USER$.PUBLIC."incubyte_project"/versions/last';
+
+
+-- Verify the Code Bundle versions.
+
+DESCRIBE CODE BUNDLE
+    SKYPOINTS_INCU.OPS.SKYPOINTS_PIPELINE_BUNDLE;
+
+
+
+    -- TEMPORARY SQL — DELETE AFTER VERIFICATION
+-- Inspect existing pipeline tasks, dependencies and entrypoints.
+
+SHOW TASKS IN SCHEMA SKYPOINTS_INCU.OPS;
+
+SELECT
+    "name" AS TASK_NAME,
+    "predecessors" AS PREDECESSORS,
+    "definition" AS TASK_DEFINITION,
+    "state" AS TASK_STATE,
+    "schedule" AS TASK_SCHEDULE
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "name" LIKE 'TASK_%'
+ORDER BY "name";
+
+
+
+-- Step 5A: Suspend the existing pipeline Task Graph.
+
+ALTER TASK SKYPOINTS_INCU.OPS.TASK_00_PREFLIGHT SUSPEND;
+
+
+
+SHOW TASKS IN SCHEMA SKYPOINTS_INCU.OPS;
+
+
+
+-- Update the root task to use the renamed master orchestrator.
+-- Existing daily schedule and warehouse are preserved.
+
+ALTER TASK SKYPOINTS_INCU.OPS.TASK_00_PREFLIGHT
+MODIFY AS
+EXECUTE CODE BUNDLE SKYPOINTS_INCU.OPS.SKYPOINTS_PIPELINE_BUNDLE
+    ENTRYPOINT = 'NB_07_MASTER_ORCHESTRATOR.ipynb';
+
+
+
+
+DESCRIBE TASK SKYPOINTS_INCU.OPS.TASK_00_PREFLIGHT;
+
+
+
+
+-- KEEP THIS SQL:
+-- Runs MART loading after data quality and reconciliation succeeds.
+
+CREATE TASK SKYPOINTS_INCU.OPS.TASK_06_MART_LOADING
+    WAREHOUSE = SKYPOINTS_WH
+    AFTER SKYPOINTS_INCU.OPS.TASK_05_DATA_QUALITY
+AS
+    EXECUTE CODE BUNDLE SKYPOINTS_INCU.OPS.SKYPOINTS_PIPELINE_BUNDLE
+        ENTRYPOINT = 'NB_06_MART_LOADING.ipynb';
+
+
+
+    SHOW TASKS IN SCHEMA SKYPOINTS_INCU.OPS;
+
+
+
+    -- Enable the root task and all dependent tasks.
+
+SELECT SYSTEM$TASK_DEPENDENTS_ENABLE(
+    'SKYPOINTS_INCU.OPS.TASK_00_PREFLIGHT'
+);
+
+
+
+
+SHOW TASKS IN SCHEMA SKYPOINTS_INCU.OPS;
+
+
+
+-- Trigger the complete Task Graph immediately.
+EXECUTE TASK SKYPOINTS_INCU.OPS.TASK_00_PREFLIGHT;
